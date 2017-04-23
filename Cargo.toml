@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Alex Iadicicco <alex@ajitek.net>"]
 
 [dependencies]
+badlog = "0.2.5"
 bytes = "0.4"
 futures = "0.1"
 log = "0.3"

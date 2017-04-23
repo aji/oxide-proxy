@@ -1,24 +1,25 @@
+extern crate badlog;
 extern crate bytes;
-
 extern crate futures;
+extern crate tokio_io;
 
 #[macro_use]
 extern crate log;
-
 #[macro_use]
 extern crate tokio_core;
-
-extern crate tokio_io;
 
 mod splice;
 
 use std::io;
 
+use futures::Async;
 use futures::Future;
 use futures::Poll;
 use futures::Stream;
 
-use splice::DualSplicer;
+use tokio_io::AsyncRead;
+
+use splice::Splicer;
 
 struct IoTask<T> {
     task: T
@@ -36,9 +37,17 @@ impl<T> Future for IoTask<T> where T: Future<Error=io::Error> {
 
     fn poll(&mut self) -> Poll<T::Item, ()> {
         match self.task.poll() {
-            Ok(result) => Ok(result),
+            Ok(Async::NotReady) => {
+                Ok(Async::NotReady)
+            },
+
+            Ok(Async::Ready(x)) => {
+                info!("an IO task finished");
+                Ok(Async::Ready(x))
+            },
+
             Err(e) => {
-                println!("an IO task errored: {}", e);
+                warn!("an IO task errored: {}", e);
                 Err(())
             }
         }
@@ -52,6 +61,8 @@ fn main() {
     use tokio_core::net::TcpStream;
     use tokio_core::reactor::Core;
 
+    badlog::init_from_env("LOG");
+
     let mut core = Core::new().expect("could not create tokio reactor");
     let handle = core.handle();
 
@@ -64,7 +75,10 @@ fn main() {
         let mut p = prev.borrow_mut();
 
         if let Some(p) = p.take() {
-            handle.spawn(IoTask::new(DualSplicer::new(p, sock)));
+            let (ar, aw) = p.split();
+            let (br, bw) = sock.split();
+            handle.spawn(IoTask::new(Splicer::new(ar, bw)));
+            handle.spawn(IoTask::new(Splicer::new(br, aw)));
         } else {
             *p = Some(sock);
         }

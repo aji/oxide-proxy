@@ -61,7 +61,7 @@ impl SpliceBuffer {
         }
     }
 
-    fn write<W: AsyncWrite>(&mut self, dest: &mut W) -> Poll<(), io::Error> {
+    fn write<W: AsyncWrite>(&mut self, dest: &mut W) -> Poll<usize, io::Error> {
         if self.poll_not_empty().is_not_ready() {
             return Ok(Async::NotReady);
         }
@@ -83,10 +83,10 @@ impl SpliceBuffer {
             self.parked_not_full.take().map(|t| t.unpark());
         }
 
-        Ok(Async::NotReady)
+        Ok(Async::Ready(wsize))
     }
 
-    fn read<R: AsyncRead>(&mut self, src: &mut R) -> Poll<(), io::Error> {
+    fn read<R: AsyncRead>(&mut self, src: &mut R) -> Poll<usize, io::Error> {
         if self.poll_not_full().is_not_ready() {
             return Ok(Async::NotReady);
         }
@@ -103,44 +103,67 @@ impl SpliceBuffer {
             self.parked_not_empty.take().map(|t| t.unpark());
         }
 
-        Ok(Async::NotReady)
+        Ok(Async::Ready(rsize))
     }
 }
 
-/// A future that can splice data across two asynchronous IO objects
-pub struct DualSplicer<A, B> {
-    a: A,
-    b: B,
-    a2b: SpliceBuffer,
-    b2a: SpliceBuffer,
+/// A future that can splice data from one IO object to another
+pub struct Splicer<R, W> {
+    r: R,
+    w: W,
+    buf: SpliceBuffer,
+    eof_r: bool,
+    eof_w: bool,
 }
 
-impl<A, B> DualSplicer<A, B> {
+impl<R, W> Splicer<R, W> {
     /// Creates a new DualSplicer that will splice data from a into b, and from b into a
-    pub fn new(a: A, b: B) -> DualSplicer<A, B> {
-        DualSplicer {
-            a: a,
-            b: b,
-            a2b: SpliceBuffer::new(),
-            b2a: SpliceBuffer::new(),
+    pub fn new(from: R, to: W) -> Splicer<R, W> {
+        Splicer {
+            r: from,
+            w: to,
+            buf: SpliceBuffer::new(),
+            eof_r: false,
+            eof_w: false,
         }
     }
 }
 
-impl<A, B> Future for DualSplicer<A, B>
-    where A: AsyncRead + AsyncWrite,
-          B: AsyncRead + AsyncWrite
+impl<R, W> Future for Splicer<R, W>
+    where R: AsyncRead,
+          W: AsyncWrite,
 {
     type Item = ();
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<(), io::Error> {
-        try!(self.a2b.read(&mut self.a));
-        try!(self.b2a.read(&mut self.b));
+        if !self.eof_r {
+            if let Async::Ready(n) = try!(self.buf.read(&mut self.r)) {
+                if n == 0 {
+                    debug!("splicer encountered EOF");
+                    self.eof_r = true;
+                } else {
+                    task::park().unpark();
+                }
+            }
+        }
 
-        try!(self.a2b.write(&mut self.b));
-        try!(self.b2a.write(&mut self.a));
+        if !self.eof_w {
+            if let Async::Ready(_) = try!(self.buf.write(&mut self.w)) {
+                task::park().unpark();
+            }
 
-        Ok(Async::NotReady)
+            if self.eof_r && self.buf.is_empty() {
+                debug!("splicer sent all data");
+                self.eof_w = true;
+            }
+        }
+
+        if self.eof_r && self.eof_w {
+            debug!("splicer finishing");
+            self.w.shutdown()
+        } else {
+            Ok(Async::NotReady)
+        }
     }
 }
