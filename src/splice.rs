@@ -14,7 +14,7 @@ use tokio_io::AsyncWrite;
 /// Size of buffered data
 const BUFFER_SIZE: usize = 4096;
 
-struct Splice {
+struct SpliceBuffer {
     data: [u8; BUFFER_SIZE],
     start: usize, // first readable byte
     end: usize, // first writable byte
@@ -22,9 +22,9 @@ struct Splice {
     parked_not_full: Option<task::Task>,
 }
 
-impl Splice {
-    fn new() -> Splice {
-        Splice {
+impl SpliceBuffer {
+    fn new() -> SpliceBuffer {
+        SpliceBuffer {
             data: unsafe { mem::uninitialized() },
             start: 0,
             end: 0,
@@ -111,8 +111,8 @@ impl Splice {
 pub struct DualSplicer<A, B> {
     a: A,
     b: B,
-    a2b: Splice,
-    b2a: Splice,
+    a2b: SpliceBuffer,
+    b2a: SpliceBuffer,
 }
 
 impl<A, B> DualSplicer<A, B> {
@@ -121,8 +121,8 @@ impl<A, B> DualSplicer<A, B> {
         DualSplicer {
             a: a,
             b: b,
-            a2b: Splice::new(),
-            b2a: Splice::new(),
+            a2b: SpliceBuffer::new(),
+            b2a: SpliceBuffer::new(),
         }
     }
 }
