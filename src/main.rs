@@ -1,3 +1,6 @@
+#![feature(test)]
+extern crate test;
+
 extern crate badlog;
 extern crate bytes;
 extern crate futures;
@@ -8,7 +11,8 @@ extern crate log;
 #[macro_use]
 extern crate tokio_core;
 
-mod splice;
+pub mod irc;
+pub mod splice;
 
 use std::io;
 
